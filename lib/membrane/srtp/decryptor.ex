@@ -97,13 +97,21 @@ if Code.ensure_loaded?(ExLibSRTP) do
           <<_ver::2, has_padding::1, _header::bitstring-size(^remaining_header_size),
             payload::binary>> = payload
 
-          {:ok, {payload, padding_size}} = Utils.strip_padding(payload, has_padding == 1)
-          metadata = put_in(buffer.metadata, [:rtp, :padding_size], padding_size)
-          buffer = %Buffer{buffer | metadata: metadata, payload: payload}
+          case Utils.strip_padding(payload, has_padding == 1) do
+            {:ok, {payload, padding_size}} ->
+              metadata = put_in(buffer.metadata, [:rtp, :padding_size], padding_size)
+              buffer = %Buffer{buffer | metadata: metadata, payload: payload}
 
-          {[buffer: {:output, buffer}], state}
+              {[buffer: {:output, buffer}], state}
 
-        {:error, reason} when reason in [:replay_fail, :replay_old] ->
+            :error ->
+              Membrane.Logger.debug("Received packet with invalid padding. Ignoring packet.")
+              {[], state}
+          end
+
+        {:error, reason} ->
+          # Besides replayed packets, this covers packets that fail authentication (or are not
+          # SRTP at all), which anyone able to reach the transport can send
           Membrane.Logger.debug("""
           Couldn't unprotect srtp packet:
           #{inspect(payload, limit: :infinity)}
@@ -111,9 +119,6 @@ if Code.ensure_loaded?(ExLibSRTP) do
           """)
 
           {[], state}
-
-        {:error, reason} ->
-          raise "Couldn't unprotect SRTP packet due to #{inspect(reason)}"
       end
     end
   end

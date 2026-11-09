@@ -341,7 +341,10 @@ defmodule Membrane.RTP.Demuxer do
         nil
 
       {:error, reason} ->
-        raise "Failed to unprotect packet due to `#{reason}`"
+        # Covers packets that fail authentication (or are not SRTP at all), which anyone able
+        # to reach the transport can send
+        Membrane.Logger.debug("Ignoring packet that couldn't be unprotected due to `#{reason}`")
+        nil
     end
   end
 

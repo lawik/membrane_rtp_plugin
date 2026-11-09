@@ -45,7 +45,9 @@ if Code.ensure_loaded?(ExLibSRTP) do
         {:ok, payload} ->
           {[buffer: {:output, %Buffer{buffer | payload: payload}}], state}
 
-        {:error, reason} when reason in [:replay_fail, :replay_old] ->
+        {:error, reason} ->
+          # Besides replayed packets, this covers packets that fail authentication (or are not
+          # SRTCP at all), which anyone able to reach the transport can send
           Membrane.Logger.debug("""
           Couldn't unprotect srtcp packet:
           #{inspect(buffer.payload, limit: :infinity)}
@@ -53,9 +55,6 @@ if Code.ensure_loaded?(ExLibSRTP) do
           """)
 
           {[], state}
-
-        {:error, reason} ->
-          raise "Couldn't unprotect SRTCP packet due to #{inspect(reason)}"
       end
     end
 
