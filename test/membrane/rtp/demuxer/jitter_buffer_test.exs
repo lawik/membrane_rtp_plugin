@@ -50,6 +50,19 @@ defmodule Membrane.RTP.Demuxer.JitterBufferTest do
     for {:buffer, {_pad, buf}} <- actions, do: buf
   end
 
+  describe "when the payload type is static, but unassigned" do
+    test "buffer is passed through without crashing" do
+      packet = %ExRTP.Packet{make_packet(1, 1000) | payload_type: 35}
+      state = init_state(packet, nil)
+      assert state.clock_rate == nil
+
+      state = JitterBuffer.insert_buffer(state, make_buffer(packet))
+      {actions, _state} = JitterBuffer.get_output_actions(state)
+
+      assert [%Membrane.Buffer{payload: <<1, 2, 3>>}] = output_buffers(actions)
+    end
+  end
+
   describe "when clock_rate is nil (unresolvable dynamic payload type)" do
     test "buffer is passed through without crashing" do
       packet = make_packet(1, 1000)

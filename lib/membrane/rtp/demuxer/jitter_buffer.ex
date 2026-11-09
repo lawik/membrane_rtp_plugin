@@ -68,7 +68,7 @@ defmodule Membrane.RTP.Demuxer.JitterBuffer do
         ) :: State.t()
   def initialize(%State{} = jitter_buffer_state, pad, pad_options, payload_type_mapping) do
     %{clock_rate: clock_rate} =
-      RTP.PayloadFormat.resolve(
+      Demuxer.resolve_payload_format(
         payload_type: jitter_buffer_state.payload_type,
         clock_rate: pad_options.clock_rate,
         payload_type_mapping: payload_type_mapping

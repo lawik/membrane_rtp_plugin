@@ -1,9 +1,11 @@
 defmodule Membrane.RTP.Session.BinTest do
   use ExUnit.Case
 
+  import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions
 
   require Membrane.Logger
+  require Membrane.Pad, as: Pad
   alias Membrane.{RemoteStream, RTCP, RTP}
   alias Membrane.RTP.PayloadFormat
   alias Membrane.Testing
@@ -245,6 +247,73 @@ defmodule Membrane.RTP.Session.BinTest do
 
     test_stream(@srtp_input, @rtp_output, encrypted_sender_report, [], [], true)
     # test_stream(@srtp_input, @rtp_output, encrypted_sender_report, [], [], false)
+  end
+
+  describe "SessionBin, when its output pad is linked" do
+    @ssrc 12_345
+
+    test "for a stream with an unknown payload type and no clock rate, raises a clear error" do
+      # static payload type unassigned by RFC 3551, as a remote peer may choose it
+      payload_type = 35
+
+      rtp_packet =
+        ExRTP.Packet.new(<<1, 2, 3>>,
+          payload_type: payload_type,
+          sequence_number: 1,
+          timestamp: 100,
+          ssrc: @ssrc
+        )
+        |> ExRTP.Packet.encode()
+
+      {pipeline, monitor_ref} = start_session_bin_pipeline([rtp_packet])
+
+      assert_pipeline_notified(pipeline, :rtp, {:new_rtp_stream, @ssrc, ^payload_type, _ext})
+
+      message = link_output_pad_and_await_crash(pipeline, monitor_ref, @ssrc)
+      assert message =~ "Unknown RTP payload type #{payload_type}"
+    end
+
+    test "for a stream that has not been announced, raises a clear error" do
+      {pipeline, monitor_ref} = start_session_bin_pipeline([])
+
+      message = link_output_pad_and_await_crash(pipeline, monitor_ref, @ssrc)
+      assert message =~ "no stream with SSRC #{@ssrc} has been announced"
+    end
+
+    defp start_session_bin_pipeline(rtp_packets) do
+      pipeline =
+        Testing.Pipeline.start_supervised!(
+          spec:
+            child(:source, %Testing.Source{
+              output: rtp_packets,
+              stream_format: %RemoteStream{type: :packetized, content_format: RTP}
+            })
+            |> via_in(Pad.ref(:rtp_input, make_ref()))
+            |> child(:rtp, RTP.SessionBin)
+        )
+
+      {pipeline, Process.monitor(pipeline)}
+    end
+
+    defp link_output_pad_and_await_crash(pipeline, monitor_ref, ssrc) do
+      ExUnit.CaptureLog.capture_log(fn ->
+        Testing.Pipeline.execute_actions(pipeline,
+          spec:
+            get_child(:rtp)
+            |> via_out(Pad.ref(:output, ssrc))
+            |> child(:sink, Testing.Sink)
+        )
+
+        assert_receive {:DOWN, ^monitor_ref, :process, _pid,
+                        {:membrane_child_crash, :rtp, {%RuntimeError{message: message}, _stack}}},
+                       2000
+
+        send(self(), {:crash_message, message})
+      end)
+
+      assert_received {:crash_message, message}
+      message
+    end
   end
 
   defp test_stream(

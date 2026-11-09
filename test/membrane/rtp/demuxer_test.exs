@@ -1,6 +1,7 @@
 defmodule Membrane.RTP.DemuxerTest do
   @moduledoc false
   use ExUnit.Case
+  import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions
   alias Membrane.Testing
 
@@ -179,6 +180,53 @@ defmodule Membrane.RTP.DemuxerTest do
 
     test "when packets are reordered in a dynamic pipeline" do
       perform_test(DynamicPipeline, true)
+    end
+  end
+
+  describe "Demuxer receiving a stream with a static, but unassigned payload type" do
+    @ssrc 12_345
+    @payload_type 35
+
+    test "announces it and binds a pad to it" do
+      payload =
+        ExRTP.Packet.new(<<1, 2, 3>>,
+          payload_type: @payload_type,
+          sequence_number: 1,
+          timestamp: 100,
+          ssrc: @ssrc
+        )
+        |> ExRTP.Packet.encode()
+
+      pipeline =
+        Testing.Pipeline.start_link_supervised!(
+          spec:
+            child(:source, %Testing.Source{
+              output: [payload],
+              stream_format: %Membrane.RemoteStream{
+                type: :packetized,
+                content_format: Membrane.RTP
+              }
+            })
+            |> child(:demuxer, Membrane.RTP.Demuxer)
+        )
+
+      assert_pipeline_notified(
+        pipeline,
+        :demuxer,
+        {:new_rtp_stream, %{ssrc: @ssrc, payload_type: @payload_type}}
+      )
+
+      Testing.Pipeline.execute_actions(pipeline,
+        spec:
+          get_child(:demuxer)
+          |> via_out(:output, options: [stream_id: {:ssrc, @ssrc}, jitter_buffer_latency: 0])
+          |> child(:sink, Testing.Sink)
+      )
+
+      assert_sink_stream_format(pipeline, :sink, %Membrane.RTP{payload_format: nil})
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: <<1, 2, 3>>})
+      assert_end_of_stream(pipeline, :sink)
+      Testing.Pipeline.terminate(pipeline)
     end
   end
 end

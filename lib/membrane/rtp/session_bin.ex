@@ -431,7 +431,16 @@ defmodule Membrane.RTP.SessionBin do
       extensions: extensions
     } = ctx.pads[pad].options
 
-    payload_type = Map.fetch!(state.ssrc_pt_mapping, ssrc)
+    payload_type =
+      case Map.fetch(state.ssrc_pt_mapping, ssrc) do
+        {:ok, payload_type} ->
+          payload_type
+
+        :error ->
+          raise "Linked #{inspect(pad)}, but no stream with SSRC #{ssrc} has been announced " <>
+                  "with a `:new_rtp_stream` notification"
+      end
+
     clock_rate = clock_rate || get_from_register!(:clock_rate, payload_type, state)
 
     {local_ssrc, state} = add_ssrc(ssrc, state)
@@ -728,14 +737,24 @@ defmodule Membrane.RTP.SessionBin do
 
   defp get_payload_type_mapping!(payload_type, state) do
     pt_mapping =
-      PayloadFormat.get_payload_type_mapping(payload_type)
+      get_default_payload_type_mapping(payload_type)
       |> Map.merge(state.fmt_mapping[payload_type] || %{})
 
     if Map.has_key?(pt_mapping, :encoding_name) and Map.has_key?(pt_mapping, :clock_rate) do
       pt_mapping
     else
-      raise "Unknown RTP payload type #{payload_type}"
+      raise "Unknown RTP payload type #{payload_type}. Provide its encoding name and clock rate " <>
+              "via the `fmt_mapping` option or pass the `clock_rate` pad option."
     end
+  end
+
+  # `PayloadFormat.get_payload_type_mapping/1` raises `KeyError` for static payload types that are
+  # unassigned or reserved in RFC 3551 (1, 2, 19-24, 27, 29, 30, 35-95). The payload type of an
+  # incoming stream is chosen by the remote peer, so treat them as unknown instead.
+  defp get_default_payload_type_mapping(payload_type) do
+    PayloadFormat.get_payload_type_mapping(payload_type)
+  rescue
+    KeyError -> %{}
   end
 
   defp get_output_payload_type!(ctx, ssrc) do

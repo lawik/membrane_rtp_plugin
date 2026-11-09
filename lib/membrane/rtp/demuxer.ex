@@ -479,7 +479,7 @@ defmodule Membrane.RTP.Demuxer do
       }
 
     %{payload_format: payload_format} =
-      RTP.PayloadFormat.resolve(
+      resolve_payload_format(
         payload_type: stream_state.payload_type,
         payload_type_mapping: payload_type_mapping
       )
@@ -494,6 +494,22 @@ defmodule Membrane.RTP.Demuxer do
       end
 
     {[stream_format: {pad, stream_format}], stream_state}
+  end
+
+  # `PayloadFormat.resolve/1` raises `KeyError` for static payload types that are unassigned or
+  # reserved in RFC 3551 (1, 2, 19-24, 27, 29, 30, 35-95). The payload type of a stream is chosen
+  # by the remote peer, so treat them as unknown instead of crashing.
+  @doc false
+  @spec resolve_payload_format(keyword()) :: %{
+          payload_format: RTP.PayloadFormat.t() | nil,
+          payload_type: RTP.payload_type() | nil,
+          clock_rate: RTP.clock_rate() | nil
+        }
+  def resolve_payload_format(args) do
+    RTP.PayloadFormat.resolve(args)
+  rescue
+    KeyError ->
+      %{payload_format: nil, payload_type: args[:payload_type], clock_rate: args[:clock_rate]}
   end
 
   @spec find_matching_pad_for_stream(
