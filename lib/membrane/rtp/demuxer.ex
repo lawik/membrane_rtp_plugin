@@ -50,7 +50,7 @@ defmodule Membrane.RTP.Demuxer do
           | {:encoding_name, RTP.encoding_name()}
           | {:payload_type, RTP.payload_type()}
 
-  @type stream_phase :: :waiting_for_matching_pad | :bound_with_pad | :timed_out
+  @type stream_phase :: :waiting_for_matching_pad | :bound_with_pad
 
   @type output_pad_options ::
           %{
@@ -104,6 +104,8 @@ defmodule Membrane.RTP.Demuxer do
                 description: """
                 This option determines the action to be taken after a stream has been announced with a 
                 `t:new_rtp_stream_notification/0` notification but the corresponding pad has not been connected within the specified timeout period.
+                In any case the stream and the packets buffered for it are then forgotten, and if packets of that stream keep arriving,
+                it is announced again.
                 """
               ],
               srtp: [
@@ -207,13 +209,6 @@ defmodule Membrane.RTP.Demuxer do
         state = put_in(state.pads_waiting_for_stream[pad], ctx.pad_options.stream_id)
         {[], state}
 
-      %{phase: :timed_out} ->
-        Membrane.Logger.warning(
-          "Connected a pad corresponding to a timed out stream, sending end_of_stream"
-        )
-
-        {[stream_format: {pad, %RTP{}}, end_of_stream: pad], state}
-
       %{phase: :waiting_for_matching_pad} = stream_state ->
         {stream_format_action, %State.StreamState{} = stream_state} =
           bind_pad_with_stream(pad, ctx.pad_options, stream_state, state.payload_type_mapping)
@@ -237,24 +232,28 @@ defmodule Membrane.RTP.Demuxer do
 
   @impl true
   def handle_info({:pad_match_timeout, ssrc}, _ctx, state) do
-    if state.stream_states[ssrc].phase == :waiting_for_matching_pad do
-      case state.not_linked_pad_handling.action do
-        :raise ->
-          raise "Pad corresponding to ssrc #{ssrc} not connected within specified timeout"
+    case state.stream_states[ssrc] do
+      %State.StreamState{phase: :waiting_for_matching_pad} ->
+        case state.not_linked_pad_handling.action do
+          :raise ->
+            raise "Pad corresponding to ssrc #{ssrc} not connected within specified timeout"
 
-        :warn ->
-          Membrane.Logger.warning(
-            "Pad corresponding to ssrc #{ssrc} not connected within specified timeout"
-          )
+          :warn ->
+            Membrane.Logger.warning(
+              "Pad corresponding to ssrc #{ssrc} not connected within specified timeout"
+            )
 
-        :ignore ->
-          :ok
-      end
+          :ignore ->
+            :ok
+        end
 
-      state = put_in(state.stream_states[ssrc].phase, :timed_out)
-      {[], state}
-    else
-      {[], state}
+        # Forget the stream along with the packets buffered for it, otherwise streams that never
+        # get linked (SSRCs are chosen by the remote peer) would accumulate indefinitely
+        {_stream_state, state} = pop_in(state.stream_states[ssrc])
+        {[], state}
+
+      _other ->
+        {[], state}
     end
   end
 
@@ -370,13 +369,8 @@ defmodule Membrane.RTP.Demuxer do
     }
 
     {buffer_actions, jitter_buffer_state} =
-      case stream_state.phase do
-        phase when phase in [:waiting_for_matching_pad, :bound_with_pad] ->
-          JitterBuffer.insert_buffer(stream_state.jitter_buffer_state, buffer)
-
-        :timed_out ->
-          stream_state.jitter_buffer_state
-      end
+      stream_state.jitter_buffer_state
+      |> JitterBuffer.insert_buffer(buffer)
       |> get_output_actions(stream_state.phase)
 
     state = put_in(state.stream_states[packet.ssrc].jitter_buffer_state, jitter_buffer_state)
