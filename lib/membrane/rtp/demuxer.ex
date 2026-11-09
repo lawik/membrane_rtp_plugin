@@ -190,8 +190,15 @@ defmodule Membrane.RTP.Demuxer do
   @impl true
   def handle_buffer(:input, %Membrane.Buffer{payload: payload}, ctx, state) do
     case classify_packet(payload) do
-      :rtp -> handle_rtp_packet(payload, ctx, state)
-      :rtcp -> handle_rtcp_packets(payload, state)
+      :rtp ->
+        handle_rtp_packet(payload, ctx, state)
+
+      :rtcp ->
+        handle_rtcp_packets(payload, state)
+
+      :malformed ->
+        Membrane.Logger.debug("Dropping packet too short to be RTP or RTCP")
+        {[], state}
     end
   end
 
@@ -309,12 +316,14 @@ defmodule Membrane.RTP.Demuxer do
     end)
   end
 
-  @spec classify_packet(binary()) :: :rtp | :rtcp
+  @spec classify_packet(binary()) :: :rtp | :rtcp | :malformed
   defp classify_packet(<<_first_byte, _marker::1, payload_type::7, _rest::binary>>) do
     if payload_type in 64..95,
       do: :rtcp,
       else: :rtp
   end
+
+  defp classify_packet(_too_short_packet), do: :malformed
 
   @spec handle_rtp_packet(binary(), CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
@@ -347,8 +356,19 @@ defmodule Membrane.RTP.Demuxer do
   @spec handle_raw_rtp_packet(binary(), CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
   defp handle_raw_rtp_packet(raw_rtp_packet, ctx, state) do
-    {:ok, packet} = ExRTP.Packet.decode(raw_rtp_packet)
+    case ExRTP.Packet.decode(raw_rtp_packet) do
+      {:ok, packet} ->
+        handle_parsed_rtp_packet(packet, ctx, state)
 
+      {:error, reason} ->
+        Membrane.Logger.debug("Dropping malformed RTP packet: #{inspect(reason)}")
+        {[], state}
+    end
+  end
+
+  @spec handle_parsed_rtp_packet(ExRTP.Packet.t(), CallbackContext.t(), State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp handle_parsed_rtp_packet(packet, ctx, state) do
     {new_stream_actions, state} =
       if Map.has_key?(state.stream_states, packet.ssrc) do
         {[], state}

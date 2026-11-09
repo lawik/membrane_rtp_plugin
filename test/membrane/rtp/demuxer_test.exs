@@ -202,7 +202,7 @@ defmodule Membrane.RTP.DemuxerTest do
     end
   end
 
-  describe "Demuxer, when the pad for a stream is not linked" do
+  describe "Demuxer with no pads linked by the parent" do
     @ssrc 12_345
     @timeout_ms 100
 
@@ -225,6 +225,33 @@ defmodule Membrane.RTP.DemuxerTest do
         metadata: %{rtp: %{sequence_number: 2}}
       })
 
+      Testing.Pipeline.terminate(pipeline)
+    end
+
+    test "drops malformed packets instead of crashing" do
+      pipeline = start_notifying_pipeline(:ignore)
+
+      malformed_packets = [
+        # too short to tell RTP from RTCP
+        <<>>,
+        <<0x80>>,
+        # RTP with a truncated fixed header
+        <<0x80, 96, 0, 1>>,
+        # RTP declaring 15 CSRCs with none present
+        <<0x8F, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1>>,
+        # RTP declaring a header extension that is not present
+        <<0x90, 96, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1>>
+      ]
+
+      Enum.each(malformed_packets, fn payload ->
+        Testing.Pipeline.execute_actions(pipeline,
+          notify_child:
+            {:source, {:execute_actions, [buffer: {:output, %Membrane.Buffer{payload: payload}}]}}
+        )
+      end)
+
+      send_rtp_packet(pipeline, 1)
+      assert_pipeline_notified(pipeline, :demuxer, {:new_rtp_stream, %{ssrc: @ssrc}})
       Testing.Pipeline.terminate(pipeline)
     end
 
