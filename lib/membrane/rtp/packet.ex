@@ -157,6 +157,7 @@ defmodule Membrane.RTP.Packet do
   #   - ID=0 and length=0 is a padding byte
   #   - ID=0 and length>0 must terminate further parsing
   #   - ID=15 must terminate further parsing
+  #   - an element whose declared length exceeds the extension block terminates further parsing
   defp parse_one_byte_header(<<0::4, 0::4, extensions::binary>>),
     do: extensions
 
@@ -170,8 +171,14 @@ defmodule Membrane.RTP.Packet do
          <<local_identifier::integer-size(4), len_data::integer-size(4), extensions::binary>>
        ) do
     len_data = len_data + 1
-    <<data::binary-size(^len_data), next_extensions::binary>> = extensions
-    extension = %Header.Extension{identifier: local_identifier, data: data}
-    {extension, next_extensions}
+
+    case extensions do
+      <<data::binary-size(^len_data), next_extensions::binary>> ->
+        extension = %Header.Extension{identifier: local_identifier, data: data}
+        {extension, next_extensions}
+
+      _truncated ->
+        <<>>
+    end
   end
 end

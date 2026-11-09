@@ -50,8 +50,10 @@ defmodule Membrane.RTP.VADTest do
 
   defp rtp_buffer(volume, timestamp) when volume in -127..0 do
     level = -volume
-    data = <<1::1, level::7>>
+    rtp_buffer_with_extension_data(<<1::1, level::7>>, timestamp)
+  end
 
+  defp rtp_buffer_with_extension_data(data, timestamp) do
     rtp_metadata = %{
       csrcs: [],
       extensions: [
@@ -113,6 +115,19 @@ defmodule Membrane.RTP.VADTest do
       :generate_initial_timestamp,
       :calculate_buffer_time_delta
     ]
+
+    test "forwards buffers whose VAD extension is not a single byte", ctx do
+      %{state: state, initial_timestamp: initial_timestamp} = ctx
+
+      for data <- [<<>>, <<1::1, 10::7, 0>>] do
+        buffer = rtp_buffer_with_extension_data(data, initial_timestamp)
+
+        assert {[buffer: {:output, out_buffer}], ^state} =
+                 VAD.handle_buffer(:input, buffer, %{}, state)
+
+        assert out_buffer.metadata.rtp.extensions == []
+      end
+    end
 
     test "keeps audio levels length", ctx do
       %{

@@ -76,6 +76,25 @@ defmodule Membrane.RTP.TWCCReceiverTest do
 
       assert [@sequence_number] = Map.keys(state.packet_info_store.seq_to_timestamp)
     end
+
+    test "ignores a TWCC extension whose data is not a 16-bit sequence number", %{
+      state: state,
+      buffer: buffer
+    } do
+      for data <- [<<1>>, <<1, 2, 3>>] do
+        malformed_extension = %Header.Extension{identifier: @default_twcc_id, data: data}
+
+        buffer =
+          Bunch.Struct.put_in(buffer, [:metadata, :rtp, :extensions], [malformed_extension])
+
+        assert {[buffer: {@default_output_pad, out_buffer}], out_state} =
+                 TWCCReceiver.handle_buffer(@default_input_pad, buffer, @ctx, state)
+
+        assert out_buffer.metadata.rtp.extensions == []
+        assert out_state.packet_info_store == state.packet_info_store
+        assert out_state.media_ssrc == nil
+      end
+    end
   end
 
   describe "When generating an RTCP event, TWCC element" do

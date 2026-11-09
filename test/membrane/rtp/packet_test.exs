@@ -71,6 +71,30 @@ defmodule Membrane.RTP.PacketTest do
     assert Packet.serialize(packet) == packet_binary
   end
 
+  test "stops parsing header extensions when the declared length exceeds the extension block" do
+    # Extension is stored on 4th bit of header
+    <<header_1::3, _extension::1, header_2::92, payload::binary>> =
+      Fixtures.sample_packet_binary()
+
+    # one 32-bit word of extension data, first element claims id=1 with 16 bytes of data
+    truncated_extension_header = <<0xBE, 0xDE, 1::16, 1::4, 15::4, 0, 0, 0>>
+
+    packet_binary =
+      <<header_1::3, 1::1, header_2::92, truncated_extension_header::binary, payload::binary>>
+
+    assert {:ok, %{packet: %Packet{header: %Header{extensions: []}, payload: ^payload}}} =
+             Packet.parse(packet_binary, @encrypted?)
+
+    # a valid element followed by a truncated one keeps the valid element
+    extension_header = <<0xBE, 0xDE, 1::16, 1::4, 0::4, 0xBE, 2::4, 15::4, 0>>
+    packet_binary = <<header_1::3, 1::1, header_2::92, extension_header::binary, payload::binary>>
+
+    assert {:ok, %{packet: %Packet{header: %Header{extensions: extensions}, payload: ^payload}}} =
+             Packet.parse(packet_binary, @encrypted?)
+
+    assert extensions == [%Header.Extension{data: <<0xBE>>, identifier: 1}]
+  end
+
   test "Serialize and then parse return same packet" do
     packet = %Packet{
       Fixtures.sample_packet()

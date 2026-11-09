@@ -108,13 +108,15 @@ defmodule Membrane.RTP.TWCCReceiver do
     {extension, buffer} = Header.Extension.pop(buffer, state.twcc_id)
 
     state =
-      if extension != nil do
-        <<seq_num::16>> = extension.data
-        store = PacketInfoStore.insert_packet_info(state.packet_info_store, seq_num)
+      case extension do
+        %Header.Extension{data: <<seq_num::16>>} ->
+          store = PacketInfoStore.insert_packet_info(state.packet_info_store, seq_num)
 
-        %{state | packet_info_store: store, media_ssrc: state.media_ssrc || ssrc}
-      else
-        state
+          %{state | packet_info_store: store, media_ssrc: state.media_ssrc || ssrc}
+
+        # extension absent or its data is not a 16-bit sequence number
+        _absent_or_malformed ->
+          state
       end
 
     pad = Pad.ref(:output, ssrc)

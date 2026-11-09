@@ -70,11 +70,8 @@ defmodule Membrane.RTP.SilenceDiscarder do
     |> handle_vad(buffer, state)
   end
 
-  defp handle_vad(nil, buffer, state), do: {[buffer: {:output, buffer}], state}
-
-  defp handle_vad(vad, buffer, state) do
+  defp handle_vad(%Header.Extension{data: <<_v::1, audio_level::7>>}, buffer, state) do
     %{dropped: dropped, silence_threshold: silence_threshold} = state
-    <<_v::1, audio_level::7>> = vad.data
 
     cond do
       audio_level >= silence_threshold ->
@@ -87,6 +84,9 @@ defmodule Membrane.RTP.SilenceDiscarder do
         {[buffer: {:output, buffer}], state}
     end
   end
+
+  # extension absent or its data is not a single audio level byte
+  defp handle_vad(_absent_or_malformed, buffer, state), do: {[buffer: {:output, buffer}], state}
 
   defp stop_dropping(buffer, state) do
     {[

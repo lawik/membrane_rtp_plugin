@@ -60,13 +60,9 @@ defmodule Membrane.RTP.VAD do
     handle_if_present(buffer, extension, state)
   end
 
-  defp handle_if_present(buffer, nil, state), do: {[buffer: {:output, buffer}], state}
-
   @timestamp_limit Bitwise.bsl(1, 32)
 
-  defp handle_if_present(buffer, extension, state) do
-    <<_v::1, level::7>> = extension.data
-
+  defp handle_if_present(buffer, %Header.Extension{data: <<_v::1, level::7>>} = extension, state) do
     new_extension = %Header.Extension{
       identifier: :vad,
       data: extension.data
@@ -90,6 +86,10 @@ defmodule Membrane.RTP.VAD do
         {[buffer: {:output, buffer}], state}
     end
   end
+
+  # extension absent or its data is not a single audio level byte
+  defp handle_if_present(buffer, _absent_or_malformed, state),
+    do: {[buffer: {:output, buffer}], state}
 
   defp handle_vad(buffer, rtp_timestamp, level_in_dbov, state) do
     level_in_db = 127 - level_in_dbov
