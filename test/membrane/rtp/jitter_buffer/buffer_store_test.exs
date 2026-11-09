@@ -251,6 +251,45 @@ defmodule Membrane.RTP.JitterBuffer.BufferStoreTest do
     end
   end
 
+  describe "When flushing over a gap in sequence numbers it" do
+    test "returns a single nil for all the missing buffers before a late one", %{
+      base_store: store
+    } do
+      gap_end = @next_index + 10
+      store = enum_into_store([gap_end, gap_end + 1], store)
+
+      assert {[nil, %Record{index: ^gap_end}, %Record{index: second_index}], store} =
+               BufferStore.flush_older_than(store, 0)
+
+      assert second_index == gap_end + 1
+      assert store.flush_index == gap_end + 1
+      assert BufferStore.dump(store) == []
+    end
+
+    test "returns a single nil for each gap when dumping" do
+      store = enum_into_store([1, 2, 5, 6, 10])
+
+      assert [
+               %Record{index: 1},
+               %Record{index: 2},
+               nil,
+               %Record{index: 5},
+               %Record{index: 6},
+               nil,
+               %Record{index: 10}
+             ] = BufferStore.dump(store)
+    end
+
+    test "treats buffers arriving later for the skipped indices as late", %{base_store: store} do
+      gap_end = @next_index + 10
+      store = enum_into_store([gap_end], store)
+      {[nil, %Record{index: ^gap_end}], store} = BufferStore.flush_older_than(store, 0)
+
+      assert {:error, :late_packet} =
+               BufferStore.insert_buffer(store, BufferFactory.sample_buffer(@next_index + 5))
+    end
+  end
+
   describe "When dumping it" do
     test "returns list that contains buffers from heap" do
       store = enum_into_store(1..10)

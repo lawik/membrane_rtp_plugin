@@ -189,13 +189,25 @@ defmodule Membrane.RTP.JitterBuffer.BufferStore do
 
       record ->
         if fun.(store, record) do
+          {gap, store} = skip_gap(store, record.index)
           {record, store} = flush_one(store)
-          flush_while(store, fun, [record | acc])
+          flush_while(store, fun, [record | gap ++ acc])
         else
           {Enum.reverse(acc), store}
         end
     end
   end
+
+  # Skips all the missing indices preceding the given one at once, reporting them as a single
+  # `nil` record. Otherwise flushing the store after a jump in sequence numbers (up to 2^15,
+  # chosen by the sender) would produce one `nil`, and thus one discontinuity event, per
+  # missing index.
+  defp skip_gap(%__MODULE__{flush_index: flush_index} = store, index)
+       when index > flush_index + 1 do
+    {[nil], %__MODULE__{store | flush_index: index - 1}}
+  end
+
+  defp skip_gap(store, _index), do: {[], store}
 
   defp add_record(%__MODULE__{heap: heap, set: set} = store, %Record{} = record, record_rollover) do
     if set |> MapSet.member?(record.index) do

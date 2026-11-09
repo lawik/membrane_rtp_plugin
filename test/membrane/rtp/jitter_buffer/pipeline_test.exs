@@ -99,13 +99,19 @@ defmodule Membrane.RTP.JitterBuffer.PipelineTest do
     assert_start_of_stream(pipeline, :buffer, :input, 5000)
     assert_start_of_stream(pipeline, :sink, :input, timeout)
 
+    # Buffers that are either never sent or arrive too late to be output
+    missing? = fn n ->
+      (rem(n, 50) >= 30 and rem(n, 50) <= 32) or (rem(n, 19) == 0 and rem(n, 15) != 0)
+    end
+
     Enum.each(1..buffers, fn n ->
       cond do
-        rem(n, 50) >= 30 and rem(n, 50) <= 32 ->
+        missing?.(n) and not missing?.(n - 1) ->
           assert_sink_event(pipeline, :sink, %Membrane.Event.Discontinuity{}, timeout)
 
-        rem(n, 19) == 0 and rem(n, 15) != 0 ->
-          assert_sink_event(pipeline, :sink, %Membrane.Event.Discontinuity{}, timeout)
+        missing?.(n) ->
+          # consecutive missing buffers are reported with a single discontinuity event
+          :ok
 
         true ->
           seq_num = rem(n, @seq_number_limit)
