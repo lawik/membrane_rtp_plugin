@@ -16,15 +16,20 @@ defmodule Membrane.RTCP.ByePacket do
   @impl true
   def decode(packet, count) do
     ssrcs_size = count * 4
-    <<ssrcs::binary-size(^ssrcs_size), reason::binary>> = packet
 
-    ssrcs =
-      ssrcs
-      |> Bunch.Binary.chunk_every(4)
-      |> Enum.map(&:binary.decode_unsigned(&1))
+    case packet do
+      <<ssrcs::binary-size(^ssrcs_size), reason::binary>> ->
+        ssrcs =
+          ssrcs
+          |> Bunch.Binary.chunk_every(4)
+          |> Enum.map(&:binary.decode_unsigned(&1))
 
-    result = %__MODULE__{ssrcs: ssrcs, reason: make_reason(reason)}
-    {:ok, result}
+        result = %__MODULE__{ssrcs: ssrcs, reason: make_reason(reason)}
+        {:ok, result}
+
+      _too_short ->
+        {:error, :malformed_packet}
+    end
   end
 
   @impl true

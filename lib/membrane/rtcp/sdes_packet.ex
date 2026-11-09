@@ -83,7 +83,12 @@ defmodule Membrane.RTCP.SdesPacket do
     end
   end
 
+  defp parse_chunks(_trailing_bytes, _acc), do: {:error, :malformed_sdes}
+
   defp parse_items(sdes_item, acc \\ [])
+
+  # chunk not terminated by a null item
+  defp parse_items(<<>>, _acc), do: {:error, :malformed_sdes}
 
   # null item denoting end of the list
   defp parse_items(<<0::8, rest::binary>>, acc) do
@@ -95,9 +100,14 @@ defmodule Membrane.RTCP.SdesPacket do
 
   # PRIV item
   defp parse_items(<<8::8, length::8, content::binary-size(length), rest::binary>>, acc) do
-    <<prefix_len::8, prefix::binary-size(prefix_len), value>> = content
-    item = {@sdes_type_atom[8], {prefix, value}}
-    parse_items(rest, [item | acc])
+    case content do
+      <<prefix_len::8, prefix::binary-size(prefix_len), value::binary>> ->
+        item = {@sdes_type_atom[8], {prefix, value}}
+        parse_items(rest, [item | acc])
+
+      _malformed_priv ->
+        {:error, :malformed_sdes}
+    end
   end
 
   defp parse_items(<<si_type::8, length::8, value::binary-size(length), rest::binary>>, acc)

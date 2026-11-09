@@ -84,6 +84,8 @@ defmodule Membrane.RTCP.TransportFeedbackPacket.TWCC do
     end
   end
 
+  def decode(_packet), do: {:error, :malformed_packet}
+
   @impl true
   def encode(%__MODULE__{} = stats) do
     %{
@@ -197,6 +199,10 @@ defmodule Membrane.RTCP.TransportFeedbackPacket.TWCC do
 
   defp parse_receive_deltas(_payload, [:reserved | _rest_status], _parsed_deltas),
     do: {:error, :symbol_reserved}
+
+  # status list declares more received packets than there are delta bytes left
+  defp parse_receive_deltas(_payload, _rest_status, _parsed_deltas),
+    do: {:error, :truncated_deltas}
 
   defp make_packet_status_chunks(scaled_receive_deltas) do
     scaled_receive_deltas

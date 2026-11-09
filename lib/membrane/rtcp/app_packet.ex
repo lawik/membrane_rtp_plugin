@@ -26,6 +26,8 @@ defmodule Membrane.RTCP.AppPacket do
      }}
   end
 
+  def decode(_packet, _subtype), do: {:error, :malformed_packet}
+
   @impl true
   def encode(%__MODULE__{
         subtype: subtype,

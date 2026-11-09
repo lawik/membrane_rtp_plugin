@@ -33,4 +33,6 @@ defmodule Membrane.RTCP.ReceiverReportPacket do
       err -> err
     end
   end
+
+  def decode(_packet, _reports_count), do: {:error, :malformed_packet}
 end
