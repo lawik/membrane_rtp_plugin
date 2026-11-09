@@ -6,6 +6,7 @@ defmodule Membrane.RTP.TWCCSender do
   use Membrane.Filter, flow_control_hints?: false
 
   require Bitwise
+  require Membrane.Logger
 
   alias __MODULE__.{CongestionControl, ReceiverRate}
   alias Membrane.RTCP.TransportFeedbackPacket.TWCC
@@ -92,19 +93,36 @@ defmodule Membrane.RTP.TWCCSender do
     %TWCC{
       # TODO: consider what to do when we lose some feedback
       feedback_packet_count: _feedback_packet_count,
-      reference_time: reference_time,
       base_seq_num: base_seq_num,
-      packet_status_count: packet_count,
-      receive_deltas: receive_deltas
+      packet_status_count: packet_count
     } = feedback
 
     max_seq_num = base_seq_num + packet_count - 1
 
-    rtt =
-      Time.vm_time() -
-        Map.fetch!(state.seq_to_timestamp, rem(max_seq_num, @seq_number_limit))
+    sequence_numbers = Enum.map(base_seq_num..max_seq_num//1, &rem(&1, @seq_number_limit))
 
-    sequence_numbers = Enum.map(base_seq_num..max_seq_num, &rem(&1, @seq_number_limit))
+    # The feedback comes from the remote peer and may reference packets we never sent
+    # (e.g. before the first one, or after a restart), in which case it is ignored.
+    if sequence_numbers == [] or
+         not Enum.all?(sequence_numbers, &Map.has_key?(state.seq_to_timestamp, &1)) do
+      Membrane.Logger.debug(
+        "Ignoring TWCC feedback for unknown sequence numbers #{base_seq_num}..#{max_seq_num}"
+      )
+
+      {[], state}
+    else
+      handle_feedback(feedback, sequence_numbers, state)
+    end
+  end
+
+  defp handle_feedback(%TWCC{} = feedback, sequence_numbers, state) do
+    %TWCC{
+      reference_time: reference_time,
+      base_seq_num: base_seq_num,
+      receive_deltas: receive_deltas
+    } = feedback
+
+    rtt = Time.vm_time() - Map.fetch!(state.seq_to_timestamp, List.last(sequence_numbers))
 
     send_timestamps = Enum.map(sequence_numbers, &Map.fetch!(state.seq_to_timestamp, &1))
 
