@@ -1,9 +1,11 @@
 defmodule Membrane.RTP.Session.BinTest do
   use ExUnit.Case
 
+  import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions
 
   require Membrane.Logger
+  require Membrane.Pad, as: Pad
   alias Membrane.{RemoteStream, RTCP, RTP}
   alias Membrane.RTP.PayloadFormat
   alias Membrane.Testing
@@ -245,6 +247,48 @@ defmodule Membrane.RTP.Session.BinTest do
 
     test_stream(@srtp_input, @rtp_output, encrypted_sender_report, [], [], true)
     # test_stream(@srtp_input, @rtp_output, encrypted_sender_report, [], [], false)
+  end
+
+  test "TWCC feedback is ignored when there is no outbound TWCC stream" do
+    # A well-formed TWCC feedback packet (RTCP PT=205, FMT=15), as any remote peer can send it
+    twcc_feedback =
+      %RTCP.TransportFeedbackPacket{
+        sender_ssrc: 1,
+        media_ssrc: 2,
+        payload: %RTCP.TransportFeedbackPacket.TWCC{
+          base_seq_num: 0,
+          reference_time: Membrane.Time.milliseconds(64),
+          packet_status_count: 1,
+          receive_deltas: [Membrane.Time.microseconds(250)],
+          feedback_packet_count: 0
+        }
+      }
+      |> RTCP.Packet.serialize()
+
+    rtp_input_ref = make_ref()
+
+    spec = [
+      child(:rtcp_source, %Testing.Source{
+        output: [twcc_feedback],
+        stream_format: %RemoteStream{type: :packetized, content_format: RTCP}
+      }),
+      child(:rtp, RTP.SessionBin),
+      child(:rtcp_sink, Testing.Sink),
+      get_child(:rtp)
+      |> via_out(Pad.ref(:rtcp_receiver_output, rtp_input_ref))
+      |> get_child(:rtcp_sink),
+      get_child(:rtcp_source)
+      |> via_in(Pad.ref(:rtp_input, rtp_input_ref))
+      |> get_child(:rtp)
+    ]
+
+    pipeline = Testing.Pipeline.start_link_supervised!(spec: spec)
+    session_bin_ref = pipeline |> Testing.Pipeline.get_child_pid!(:rtp) |> Process.monitor()
+
+    assert_end_of_stream(pipeline, :rtcp_sink)
+    refute_receive {:DOWN, ^session_bin_ref, :process, _pid, _reason}, 500
+
+    Testing.Pipeline.terminate(pipeline)
   end
 
   defp test_stream(

@@ -662,8 +662,15 @@ defmodule Membrane.RTP.SessionBin do
   end
 
   @impl true
-  def handle_child_notification({:twcc_feedback, _feedback} = msg, _rtcp_parser, _ctx, state) do
-    {[notify_child: {:twcc_sender, msg}], state}
+  def handle_child_notification({:twcc_feedback, _feedback} = msg, _rtcp_parser, ctx, state) do
+    # TWCC feedback can be received from a remote peer regardless of whether any outbound
+    # stream with the TWCC extension (and thus the TWCC sender) exists
+    if Map.has_key?(ctx.children, :twcc_sender) do
+      {[notify_child: {:twcc_sender, msg}], state}
+    else
+      Membrane.Logger.debug("Ignoring TWCC feedback, as there is no TWCC sender")
+      {[], state}
+    end
   end
 
   @impl true
