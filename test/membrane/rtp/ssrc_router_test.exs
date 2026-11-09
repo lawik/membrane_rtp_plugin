@@ -4,11 +4,17 @@ defmodule Membrane.RTP.SSRCRouterTest do
   import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions
 
+  require Membrane.Pad, as: Pad
+
   alias Membrane.Buffer
   alias Membrane.RTP.Header.Extension
   alias Membrane.RTP.SSRCRouter
   alias Membrane.RTP.Support.TestSource
   alias Membrane.Testing.Pipeline
+
+  # Limits hardcoded in `Membrane.RTP.SSRCRouter`
+  @max_unlinked_ssrcs 100
+  @max_buffered_packets_per_ssrc 500
 
   @rtp_metadata_template %{
     csrcs: [],
@@ -114,6 +120,79 @@ defmodule Membrane.RTP.SSRCRouterTest do
     Pipeline.terminate(pipeline)
   end
 
+  test "Bounds the number of packets buffered for a stream awaiting an output pad" do
+    pipeline = init_pipeline()
+
+    buffers =
+      Enum.map(1..(@max_buffered_packets_per_ssrc + 10), fn seq_num ->
+        %Buffer{
+          payload: <<seq_num::16>>,
+          metadata: %{rtp: %{@rtp_metadata_template | sequence_number: seq_num}}
+        }
+      end)
+
+    Pipeline.execute_actions(pipeline,
+      notify_child: {:source, {:execute_actions, [buffer: {:output, buffers}]}}
+    )
+
+    assert_pipeline_notified(pipeline, :ssrc_router, {:new_rtp_stream, 1, _pt, _extensions})
+    link_output_pad(pipeline, 1)
+
+    for seq_num <- 1..@max_buffered_packets_per_ssrc do
+      assert_sink_buffer(pipeline, {:sink, 1}, %Buffer{
+        metadata: %{rtp: %{sequence_number: ^seq_num}}
+      })
+    end
+
+    refute_sink_buffer(pipeline, {:sink, 1}, _buffer, 200)
+    Pipeline.terminate(pipeline)
+  end
+
+  test "Bounds the number of streams awaiting an output pad" do
+    pipeline = init_pipeline()
+
+    for ssrc <- 1..(@max_unlinked_ssrcs + 5) do
+      src_send_meta_buffer(pipeline, %{@rtp_metadata_template | ssrc: ssrc})
+    end
+
+    for ssrc <- 1..@max_unlinked_ssrcs do
+      assert_pipeline_notified(pipeline, :ssrc_router, {:new_rtp_stream, ^ssrc, _pt, _extensions})
+    end
+
+    refute_pipeline_notified(pipeline, :ssrc_router, {:new_rtp_stream, _ssrc, _pt, _ext}, 200)
+
+    # Linking a pad makes room for another stream
+    link_output_pad(pipeline, 1)
+    assert_sink_buffer(pipeline, {:sink, 1}, %Buffer{metadata: %{rtp: %{ssrc: 1}}})
+
+    new_ssrc = @max_unlinked_ssrcs + 10
+    src_send_meta_buffer(pipeline, %{@rtp_metadata_template | ssrc: new_ssrc})
+
+    assert_pipeline_notified(
+      pipeline,
+      :ssrc_router,
+      {:new_rtp_stream, ^new_ssrc, _pt, _extensions}
+    )
+
+    # Streams explicitly accepted by the parent are not subject to the limit
+    accepted_ssrc = @max_unlinked_ssrcs + 20
+
+    send_router_message(pipeline, %SSRCRouter.StreamsInfo{
+      require_extensions: %{},
+      accept_ssrcs: [accepted_ssrc]
+    })
+
+    src_send_meta_buffer(pipeline, %{@rtp_metadata_template | ssrc: accepted_ssrc})
+
+    assert_pipeline_notified(
+      pipeline,
+      :ssrc_router,
+      {:new_rtp_stream, ^accepted_ssrc, _pt, _extensions}
+    )
+
+    Pipeline.terminate(pipeline)
+  end
+
   defp init_pipeline() do
     Pipeline.start_link_supervised!(
       spec:
@@ -127,6 +206,15 @@ defmodule Membrane.RTP.SSRCRouterTest do
 
     Pipeline.execute_actions(pipeline,
       notify_child: {:source, {:execute_actions, [buffer: {:output, buffer}]}}
+    )
+  end
+
+  defp link_output_pad(pipeline, ssrc) do
+    Pipeline.execute_actions(pipeline,
+      spec:
+        get_child(:ssrc_router)
+        |> via_out(Pad.ref(:output, ssrc))
+        |> child({:sink, ssrc}, Membrane.Testing.Sink)
     )
   end
 

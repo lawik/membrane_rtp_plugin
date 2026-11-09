@@ -604,7 +604,11 @@ defmodule Membrane.RTP.SessionBin do
   @impl true
   def handle_pad_removed(Pad.ref(:output, ssrc), ctx, state) do
     # TODO: parent may not know when to unlink, we need to timout SSRCs and notify about that and BYE packets over RTCP
-    state = %{state | ssrcs: Map.delete(state.ssrcs, ssrc)}
+    state = %{
+      state
+      | ssrcs: Map.delete(state.ssrcs, ssrc),
+        ssrc_pt_mapping: Map.delete(state.ssrc_pt_mapping, ssrc)
+    }
 
     to_remove =
       Enum.flat_map(ctx.children, fn

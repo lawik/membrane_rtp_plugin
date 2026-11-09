@@ -25,6 +25,14 @@ defmodule Membrane.RTP.SSRCRouter do
   @rtcp_arrival_event [Membrane.RTP, :rtcp, :arrival]
   @rtcp_sent_event [Membrane.RTP, :rtcp, :sent]
 
+  # Packets of a new stream are buffered until the parent links the corresponding output pad.
+  # Since SSRCs are chosen by the remote peer, both the number of streams awaiting a pad and the
+  # number of packets buffered for each of them have to be bounded, otherwise a peer sending
+  # packets with ever-changing SSRCs (or a stream that never gets linked) would grow the state
+  # indefinitely. The limits are generous enough not to affect a parent linking pads promptly.
+  @max_unlinked_ssrcs 100
+  @max_buffered_packets_per_ssrc 500
+
   def_input_pad :input,
     accepted_format: any_of(RTCP, RTP),
     availability: :on_request,
@@ -260,6 +268,13 @@ defmodule Membrane.RTP.SSRCRouter do
 
         {[], state}
 
+      ssrc not in state.known_ssrcs and map_size(state.buffered_actions) >= @max_unlinked_ssrcs ->
+        Membrane.Logger.debug("""
+        Dropping packet of SSRC #{ssrc}: #{@max_unlinked_ssrcs} streams are already awaiting an output pad
+        """)
+
+        {[], state}
+
       true ->
         Membrane.Logger.debug("New RTP stream notification: #{inspect({ssrc, payload_type})}")
 
@@ -273,11 +288,25 @@ defmodule Membrane.RTP.SSRCRouter do
   end
 
   defp maybe_buffer_action(action, ssrc, ctx, state) do
-    if linked?(ssrc, ctx) do
-      {[action], state}
-    else
-      state = update_in(state, [:buffered_actions, ssrc], &[action | &1])
-      {[], state}
+    cond do
+      linked?(ssrc, ctx) ->
+        {[action], state}
+
+      # the stream has not been accepted or its output pad has already been removed
+      not Map.has_key?(state.buffered_actions, ssrc) ->
+        {[], state}
+
+      match?({:buffer, _buffer}, action) and
+          length(state.buffered_actions[ssrc]) >= @max_buffered_packets_per_ssrc ->
+        Membrane.Logger.debug(
+          "Dropping packet of SSRC #{ssrc}: buffer limit reached while awaiting an output pad"
+        )
+
+        {[], state}
+
+      true ->
+        state = update_in(state, [:buffered_actions, ssrc], &[action | &1])
+        {[], state}
     end
   end
 
